@@ -1,189 +1,144 @@
-# Import dependencies
-from distutils.log import debug
-from genericpath import exists
+import json
 import numpy as np
 import sqlalchemy
-import re
-import datetime as dt
 from sqlalchemy.ext.automap import automap_base
 from sqlalchemy.orm import Session
 from sqlalchemy import create_engine, func
+
 from flask import Flask, jsonify
+import datetime as dt
 
 #Database setup
 engine = create_engine("sqlite:///Resources/hawaii.sqlite")
 
-# Reflect the db in a new model
+#Mirror mirror on the wall, can we reflect at all?
 Base = automap_base()
-# reflect the tables
 Base.prepare(engine, reflect=True)
 
-Stn = Base.classes.station
-Meas = Base.classes.measurement
+#Saving references to objects
+Measurement = Base.classes.measurement
+Station = Base.classes.station
 
 #Flask setup
 app = Flask(__name__)
 
-#Define routes
+#Flask routes
 @app.route("/")
 def welcome():
-    """A list of all available routes"""
+    """List availble api routes"""
     return (
-        f"Here are the routes: <br/>"
-        f"/api/v1.0/precipitation<br/>"
-        f"/api/v1.0/station<br/>"
-        f"/api/v1.0/tobs<br/>"
-        f"/api/v1.0/start (enter as YYYY-MM-DD)<br/>"
-        f"/api/v1.0/end (enter as YYYY-MM-DD)"
-
+        f"Available routes:<br>"
+        f"/api/v1.0/precipitation</a><br>"
+        f"/api/v1.0/stations</a><br>"
+        f"/api/v1.0/tobs</a><br>"
+        f"/api/v1.0/start<br>"
+        f"/api/v1.0/start/end"
     )
-
-# Precipitation route -- Convert query results to a dictionary using date as the key and tobs as the value.
 @app.route("/api/v1.0/precipitation")
 def precipitation():
-    #create session
+    #Create session
     session = Session(engine)
-    #Query the measurements table
-    results = (session.query(Meas.date, Meas.tobs).order_by(Meas.date))
 
-    #Create a dictionary
-    precip_date_tobs = []
-    for each_row in results:
-        dt_dict = {}
-        dt_dict['date'] = each_row.date
-        dt_dict['tobs'] = each_row.tobs
-        precip_date_tobs.append(dt_dict)
-    return jsonify(
-        precip_date_tobs
-        )
+    """Return a list of dates and precipitation"""
+    #Query all precipitation
+    results = session.query(Measurement.date,Measurement.prcp).all()
 
-@app.route("/api/v1.0/stations") #A JSON listing of stations.
+    session.close()
+
+    #Convert list of tuples into normal list
+    all_dates_prcp = []
+    for date, precip in results:
+        date_dict = {}
+        date_dict[date] = precip
+        all_dates_prcp.append(date_dict)
+    return jsonify(all_dates_prcp)
+
+@app.route("/api/v1.0/stations")
 def stations():
+    #Create session
     session = Session(engine)
-    results = session.query(Stn).all()
 
-    # 'tuple-ize' into a 'normal' list
-    station_details = list(np.ravel(results))
-    return jsonify(
-        station_details
-    )
+    """Return a list of stations"""
+    #Query all stations
+    results = session.query(Station.station, Station.name).all()
 
-@app.route("/api/v1.0/tobs") # Query the dates and temperature observations of the most active station for the last year of data
+    session.close()
+
+    #Convert list of tuples into normal list.
+    all_stations = list(np.ravel(results))
+
+    return jsonify(all_stations)
+
+#Query for dates and temps from a year from the last data point
+@app.route("/api/v1.0/tobs")
 def tobs():
-    session = Session(engine)
-    latest_date = (
-        session.query(Meas.date).order_by(Meas.date.desc()).first()
-        )
-    latest_date_str = str(latest_date)
-    latest_date_str = re.sub("'|,", "", latest_date_str)
-    latest_date_obj = dt.datetime.strptime(latest_date_str, '(%Y-%m-%d)')
-    query_start_date = dt.date(latest_date_obj.year, latest_date_obj.month, latest_date_obj.day) - dt.timedelta(days=365)
-
-    #Query station names and their observations, sorted descending, most active
-    sta_list = session.query(
-        Meas.station, func.count(Meas.station)).group_by(Meas.station).order_by(func.count(Meas.station).desc()).all()
-
-    station_list = sta_list[0][0]
-    print(station_list)
-
-    #Return a list of tobs for theyear before the final date
-    results = (session.query(Meas.station, Meas.date, Meas.tobs).\
-        filter(Meas.date>=query_start_date).filter(Meas.station == station_list).all())
-
-    #JSON results
-    tobs_list = []
-    line = {}
-    line['Date'] = results[1]
-    line['Station']=results[0]
-    line['Temperature'] = int(results[2])
-    tobs_list.append(line)
-    return jsonify(
-        tobs_list
-    )
-
-@app.route("/api/v1.0/<start>") #Min/Avg/Max for all dates after selected date
-def start_only(start):
-
+    # Create our session (link) from Python to the DB
     session = Session(engine)
 
-    date_max = session.query(Meas.date).order_by(Meas.date.desc()).first()
-    date_max_str = str(date_max)
-    date_max = re.sub("'|,","",date_max_str)
-    print(date_max_str)
+    """Return a list of tobs for the last year of data in the table"""
+    query_date = dt.date(2017, 8, 23) - dt.timedelta(days=365)
 
-    date_min = session.query(Meas.date).order_by(Meas.date).first()
-    date_min_str = str(date_min)
-    date_min_str = re.sub("'|,","",date_min_str)
-    print(date_min_str)
+    results = session.query(Measurement.station, Measurement.tobs).\
+        filter(Measurement.date >= query_date).all()
+        
+    session.close()
 
-    #Check for user input error
-    valid_date = session.query(exists().where(Meas.date == start)).scalar()
+    # Convert list of tuples into normal list
+    all_tobs = list(np.ravel(results))
 
-    if valid_date:
+    return jsonify(all_tobs)
 
-        results = (session.query(func.min(Meas.tobs), func.avg(Meas.tobs), func.max(Meas.tobs)).filter(Meas.date >=start).all())
-        tmin = results[0][0]
-        tavg = '{0:.4}'.format(results[0][1])
-        tmax = results[0][2]
+#Create function to validate input as a specific date format -- YYYY-MM-DD
+def validate(date_text):
+    try:
+        dt.datetime.strptime(date_text, '%Y-%m-%d')
+    except ValueError:
+        raise ValueError("Oops, incorrect date format, should be YYYY-MM-DD")
 
-        printout = ( ['Entered start date: ' + start,
-            'The lowest temperature was ' + str(tmin) + ' F',
-            'The average temperature was ' + str(tavg) + ' F',
-            'The highest temperature was ' + str(tmax) + ' F'])
-        return jsonify(printout)
+#When provided the start date only, calculate the tmin, tavg, & tmax for all date greater than or equal to the start date
+@app.route("/api/v1.0/<startDate>")
+def temp_date_end(startDate):
+    """Fetch the tmin, tavg, tmax given a start date, variables provided by the user or a 404 if not."""
 
-    return jsonify({"error": f"Input date {start} not valid. Date range is {date_min_str} to {date_max_str}"}), 404
+    if isinstance(startDate,str):
+        print(f"A date passed, determine aggregate functions over date range")
+        validate(startDate)
+        #Create session
+        session = Session(engine)
 
-@app.route("/api/v1.0/<start>/<end>") #Min/Avg/Max for between dates -- start and end
-def start_end(start, end):
+        results = session.query(func.min(Measurement.tobs), func.avg(Measurement.tobs), \
+            func.max(Measurement.tobs)).filter(Measurement.date >= startDate).first()
+        
+        session.close()
 
-    #create session
-    session = Session(engine)
+        #Convert to list
+        agg_temps = list(np.ravel(results))
+        return jsonify(agg_temps)
+    return jsonify({"error": "Date(s) not found."}), 404
 
-    #An ounce of protection is worth a pound of cure . . .
-    date_range_max = session.query(Meas.date).order_by(Meas.date.desc()).first()
-    date_range_max_str = str(date_range_max)
-    date_range_max_str = re.sub("'|,","",date_range_max_str)
-    print(date_range_max_str)
+#When provided the start & end date -- separated by "/" -- calculate the tmin, tavg, & tmax for selected dates
+@app.route("/api/v1.0/<startDate>/<endDate>")
+def temp_date_range(startDate,endDate):
+    """Fetch the tmin, tavg, and tmax given a date range"""
 
-    date_range_min = session.query(Meas.date).first()
-    date_range_min_str = str(date_range_min)
-    date_range_min_str = re.sub("'|,","",date_range_min_str)
-    print(date_range_min_str)
+    if isinstance(endDate,str):
+        print(f"Both dates passed, determine the aggregates")
+        validate(startDate)
+        validate(endDate)
 
-    #Checking dates . . .
-    valid_entry_start = session.query(exists().where(Meas.date == start)).scalar()
-    valid_entry_end = session.query(exists().where(Meas.date == end)).scalar()
+        #Create session
+        session = Session(engine)
 
-    if valid_entry_start and valid_entry_end:
+        results = session.query(func.min(Measurement.tobs), func.avg(Measurement.tobs), \
+            func.max(Measurement.tobs)).filter(Measurement.date >= startDate).filter(Measurement.date <= endDate).first()
+        
+        session.close()
 
-        results = (
-            session.query(func.min(Meas.tobs),
-            func.avg(Meas.tobs),
-            func(max(Meas.tobs)).filter(Meas.date >= start).filter(Meas.date)<=end).all()
-        )
+        #Convert to list
+        agg_temps = list(np.ravel(results))
 
-        tmin = results[0][0]
-        tavg = '{0:.4}'.format(results[0][1])
-        tmax = results[0][2]
-
-        result_printout = (
-            ['Entered start date: ' + start, 'Entered end date: ' + end, 'The lowest temperature was ' + str(tmin) + ' F',\
-                'The average temperature was ' + str(tavg) + ' F', 'The highest temperature was ' + str(tmax) + ' F']
-        )
-
-        return jsonify(result_printout)
-
-    if not valid_entry_start and not valid_entry_end:
-        return jsonify({"error": f"Start date not valid {start} and end date {end}. Date range \
-            is {date_range_min_str} to {date_range_max_str}"}), 404
-            
-    if not valid_entry_start:
-        return jsonify({"error": f"Start date {start} not valid. Date range is {date_range_min_str} to {date_range_max_str}"}), 404
+        return jsonify(agg_temps)
+    return jsonify({"error": "Date(s) not found."}), 404
     
-    if not valid_entry_end:
-        return jsonify({"error": f"End date {end} not valid. Date range is {date_range_min_str} to {date_range_max_str}"}), 404
-
-
-if __name__== "__main__":
+if __name__ == '__main__':
     app.run(debug=True)
